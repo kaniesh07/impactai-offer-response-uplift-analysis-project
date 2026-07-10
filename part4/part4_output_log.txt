@@ -1,0 +1,93 @@
+======================================================================
+TEST PROMPT DEMO
+======================================================================
+API key detected via .env / environment: False
+No OPENAI_API_KEY found (part4/.env not present or empty). call_llm() is fully implemented and will be used automatically the moment a key is added to part4/.env -- see .env.example. Falling back to mock_llm() for this run so the pipeline still completes end-to-end.
+
+======================================================================
+SYSTEM PROMPT (verbatim)
+======================================================================
+You are a marketing analytics assistant. Given a customer's feature values, a trained model's predicted class, and its predicted probability, explain the prediction in plain business language. Respond with ONLY a single valid JSON object matching this schema: {"prediction_label": "yes"|"no", "confidence_level": "low"|"medium"|"high", "top_reason": string, "second_reason": string, "next_step": string}. Do not include any text outside the JSON object.
+
+======================================================================
+USER PROMPT TEMPLATE (verbatim)
+======================================================================
+CUSTOMER_FEATURES: {features_json}
+PREDICTION: {prediction_label}
+PROBABILITY: {probability:.4f}
+Explain this prediction.
+
+Temperature=0 rationale: for a business-facing report, explanations must be reproducible -- the same customer/prediction pair should yield the same explanation every time it's regenerated (e.g., for an audit trail or a re-run of the same campaign report). temperature=0 makes the LLM's output deterministic (modulo minor provider-side non-determinism), which is preferable here over the creative variability higher temperatures introduce.
+
+======================================================================
+PII GUARDRAIL DEMONSTRATION
+======================================================================
+Input WITH email: 'Customer contact: jane.doe@example.com, please explain their prediction.' -> proceed=False | BLOCKED: input contains an email address (PII)
+Input CLEAN: 'Please explain this customer's offer completion prediction.' -> proceed=True | OK: no PII detected
+
+======================================================================
+Loading best_model.pkl from Part 3
+======================================================================
+Loaded pipeline: Pipeline(steps=[('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler()),
+                ('clf',
+                 RandomForestClassifier(max_depth=15, min_samples_leaf=5,
+                                        n_estimators=150, random_state=42))])
+
+======================================================================
+TEMPERATURE A/B TABLE (temp=0 vs temp=0.7) -- mock_llm fallback (no key configured)
+======================================================================
+
+Profile: High-engagement BOGO customer
+  temp=0.0 -> {"prediction_label": "yes", "confidence_level": "high", "top_reason": "Prediction is primarily driven by a high historical transaction count.", "second_reason": "A secondary factor is consistently viewing past offers.", "next_step": "Prioritize for this offer in the next campaign send."}
+  temp=0.7 -> {"prediction_label": "yes", "confidence_level": "high", "top_reason": "Prediction is primarily driven by a high historical transaction count.", "second_reason": "Additionally influenced by consistently viewing past offers.", "next_step": "Prioritize for this offer in the next campaign send."}
+  identical across temps: False
+
+Profile: Low-engagement informational customer
+  temp=0.0 -> {"prediction_label": "no", "confidence_level": "high", "top_reason": "Prediction is primarily driven by no prior transaction history.", "second_reason": "A secondary factor is never having viewed a prior offer.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}
+  temp=0.7 -> {"prediction_label": "no", "confidence_level": "high", "top_reason": "Prediction is primarily driven by no prior transaction history.", "second_reason": "Additionally influenced by never having viewed a prior offer.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}
+  identical across temps: False
+
+Profile: Moderate-engagement discount customer
+  temp=0.0 -> {"prediction_label": "no", "confidence_level": "low", "top_reason": "Prediction is primarily driven by a discount offer with a $20 spend threshold.", "second_reason": "No strong secondary signal identified.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}
+  temp=0.7 -> {"prediction_label": "no", "confidence_level": "low", "top_reason": "Prediction is most influenced by a discount offer with a $20 spend threshold.", "second_reason": "No strong secondary signal identified.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}
+  identical across temps: False
+
+Observed variability: at temp=0 responses are effectively deterministic (modulo minor provider-side non-determinism even at temp=0, which is expected and normal for real LLM APIs); at temp=0.7 phrasing/wording is expected to vary more across calls while the underlying grounded content -- prediction_label, confidence_level, and which features get cited -- should stay anchored to the same real prediction/probability, since the prompt constrains the model to those facts regardless of temperature.
+
+======================================================================
+3-ROW DEMONSTRATION TABLE
+======================================================================
+
+              Feature Input (summary) Predicted Class  Probability                                                                                                                                                                                                                                                                                             Explanation JSON Validation Status
+        High-engagement BOGO customer             yes       0.9933             {"prediction_label": "yes", "confidence_level": "high", "top_reason": "Prediction is primarily driven by a high historical transaction count.", "second_reason": "A secondary factor is consistently viewing past offers.", "next_step": "Prioritize for this offer in the next campaign send."}             VALID
+Low-engagement informational customer              no       0.0000 {"prediction_label": "no", "confidence_level": "high", "top_reason": "Prediction is primarily driven by no prior transaction history.", "second_reason": "A secondary factor is never having viewed a prior offer.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}             VALID
+Moderate-engagement discount customer              no       0.4088     {"prediction_label": "no", "confidence_level": "low", "top_reason": "Prediction is primarily driven by a discount offer with a $20 spend threshold.", "second_reason": "No strong secondary signal identified.", "next_step": "Consider a lower-difficulty or higher-reward alternative offer instead."}             VALID
+
+Saved demonstration table -> part4_demonstration_table.csv
+
+======================================================================
+SCHEMA VALIDATION FAILURE DEMO (malformed LLM output -> fallback)
+======================================================================
+Schema validation failed: 'top_reason' is a required property
+
+Failed validating 'required' in schema:
+    {'type': 'object',
+     'properties': {'prediction_label': {'type': 'string',
+                                         'enum': ['yes', 'no']},
+                    'confidence_level': {'type': 'string',
+                                         'enum': ['low', 'medium', 'high']},
+                    'top_reason': {'type': 'string'},
+                    'second_reason': {'type': 'string'},
+                    'next_step': {'type': 'string'}},
+     'required': ['prediction_label',
+                  'confidence_level',
+                  'top_reason',
+                  'second_reason',
+                  'next_step'],
+     'additionalProperties': False}
+
+On instance:
+    {'prediction_label': 'maybe', 'confidence_level': 'high'}
+Malformed input: {"prediction_label": "maybe", "confidence_level": "high"}
+Result: {'prediction_label': None, 'confidence_level': None, 'top_reason': None, 'second_reason': None, 'next_step': None} | Status: INVALID (fallback used)
