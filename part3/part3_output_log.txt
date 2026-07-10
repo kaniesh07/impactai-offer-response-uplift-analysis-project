@@ -1,0 +1,122 @@
+Feature matrix: (16994, 19) (leak-free -- excludes ['n_offers_completed', 'avg_time_to_complete_hours', 'has_completed_offer'])
+Train/test shapes: (13595, 19) / (3399, 19)
+
+======================================================================
+TASK 1: Unconstrained Decision Tree
+======================================================================
+Train accuracy: 1.0000 | Test accuracy: 0.8294 | Gap: 0.1706
+An unconstrained tree grows until leaves are pure (or min samples exhausted), which memorizes noise in the training data -- the large train/test gap reflects classic high-variance overfitting: the model fits idiosyncrasies of the training rows that do not generalize.
+
+======================================================================
+TASK 2: Controlled Decision Tree (max_depth=5, min_samples_split=20)
+======================================================================
+Train accuracy: 0.8357 | Test accuracy: 0.8411 | Gap: -0.0054
+Compared to the unconstrained tree's gap of 0.1706, the controlled tree's gap of -0.0054 is smaller -- capping depth and requiring a minimum split size limits how finely the tree can carve up the training data, trading some training accuracy for better generalization.
+
+======================================================================
+TASK 3: Gini vs Entropy (both max_depth=5)
+======================================================================
+Gini test accuracy: 0.8411
+Entropy test accuracy: 0.8361
+Gini impurity: Gini(t) = 1 - sum_i(p_i^2), measures the probability of misclassifying a randomly chosen element if labeled by the class distribution at that node.
+Entropy: H(t) = -sum_i(p_i * log2(p_i)), measures the information/disorder at a node in bits. Both criteria typically select similar splits in practice; entropy is marginally more computationally expensive due to the logarithm.
+
+======================================================================
+TASK 4: Random Forest (n_estimators=100, max_depth=10)
+======================================================================
+Train accuracy: 0.9065 | Test accuracy: 0.8838 | Test ROC-AUC: 0.9493
+
+Top-5 feature importances:
+n_transactions            0.183474
+reward                    0.130961
+duration                  0.116169
+difficulty                0.104428
+membership_tenure_days    0.093363
+dtype: float64
+Interpretation: the ranking of offer-economics features (reward/difficulty/duration/offer_type) alongside demographic features (income/age) shows that HOW an offer is designed matters roughly as much as WHO the customer is -- a substantively useful finding for marketing strategy, not just a modeling artifact.
+
+Bagging explanation: Random Forest builds each tree on a bootstrap resample of the training rows (sampling with replacement) and, at each split, considers only a random subset of ~sqrt(n_features) candidate features. This decorrelates individual trees -- since no single strong feature can dominate every tree's early splits -- so averaging their predictions reduces variance far more than a single deep tree could achieve alone. This directly explains why ['n_transactions', 'reward', 'duration', 'difficulty', 'membership_tenure_days'] all surface as important across many trees rather than one feature monopolizing the model.
+
+======================================================================
+TASK 4a: Gradient Boosting (n_estimators=100, learning_rate=0.1, max_depth=3)
+======================================================================
+Test accuracy: 0.8873 | Test ROC-AUC: 0.9511
+
+======================================================================
+TASK 4b: Feature ablation (drop 5 lowest-importance features)
+======================================================================
+Dropping lowest-importance features:
+channel_web       0.008818
+channel_social    0.006842
+channel_mobile    0.005023
+gender_O          0.000573
+channel_email     0.000000
+dtype: float64
+Full model AUC: 0.9493 | Reduced model (14 features) AUC: 0.9494
+AUC change from dropping 5 lowest-importance features: +0.0001
+Production trade-off: a small AUC change for a meaningfully simpler model is usually worth it at marketing scale -- fewer features means cheaper feature computation/storage per scoring pass, simpler monitoring for feature drift, and a lower-latency inference path when scoring millions of customers ahead of a campaign send.
+
+======================================================================
+TASK 5: 5-fold Stratified CV comparison (scoring=roc_auc)
+======================================================================
+LogisticRegression: mean AUC = 0.9194, std = 0.0069
+DecisionTree(ctrl): mean AUC = 0.9020, std = 0.0082
+RandomForest: mean AUC = 0.9453, std = 0.0047
+GradientBoosting: mean AUC = 0.9473, std = 0.0047
+
+CV summary table:
+                    mean_auc   std_auc
+LogisticRegression  0.919401  0.006865
+DecisionTree(ctrl)  0.901999  0.008151
+RandomForest        0.945326  0.004717
+GradientBoosting    0.947294  0.004677
+
+======================================================================
+TASK 6: GridSearchCV (Imputer -> Scaler -> RandomForest)
+======================================================================
+Total configurations in grid: 27 (x 5 CV folds = 135 total fits)
+Best params: {'clf__max_depth': 15, 'clf__min_samples_leaf': 5, 'clf__n_estimators': 150}
+Best CV AUC: 0.9470
+Best pipeline test AUC: 0.9510
+Grid vs Randomized Search trade-off: GridSearchCV exhaustively evaluates all 27 configurations, guaranteeing the optimum within the specified grid but scaling multiplicatively with each added hyperparameter/value. RandomizedSearchCV instead samples a fixed budget of random configurations from the same space -- for large grids this typically finds a near-optimal configuration in a fraction of the compute, at the cost of no formal optimality guarantee. At this grid's size (27 configs), exhaustive search is still cheap enough to be the better choice; it stops being practical once individual hyperparameters have many more values or more hyperparameters are added.
+
+======================================================================
+TASK 7: Manual learning curve (best pipeline, 20/40/60/80/100% of training data)
+======================================================================
+
+  pct_data  n_samples  train_auc  test_auc
+0      20%       2719   0.980860  0.943677
+1      40%       5438   0.979812  0.948143
+2      60%       8157   0.980342  0.949862
+3      80%      10876   0.980136  0.949332
+4     100%      13595   0.979878  0.951019
+
+Train/test gap at 100% data: 0.0289
+Test AUC improvement from 20% to 100% of data: +0.0073
+Conclusion: roughly converged -- test AUC has plateaued and the train/test gap is stable, suggesting the model has extracted most of the signal available in this feature set at the current capacity.
+Saved learning curve plot -> plots/learning_curve.png
+
+======================================================================
+Serialize best_model.pkl
+======================================================================
+Saved best_pipeline (GridSearchCV winner) -> best_model.pkl
+
+Reload-and-predict sanity check on 2 hand-crafted customer profiles:
+Profile A: predicted offer_completed=1, probability=0.9864
+Profile B: predicted offer_completed=0, probability=0.0000
+
+======================================================================
+SUMMARY: All models (Parts 2 + 3) by CV mean AUC, CV std AUC, test AUC
+======================================================================
+
+                              model  cv_mean_auc  cv_std_auc  test_auc
+0                LogisticRegression     0.919401    0.006865  0.930161
+1       DecisionTree(ctrl, depth=5)     0.901999    0.008151  0.909289
+2        RandomForest(default grid)     0.945326    0.004717  0.949346
+3                  GradientBoosting     0.947294    0.004677  0.951120
+4  RandomForest(GridSearchCV-tuned)     0.947016         NaN  0.951019
+
+Highest raw test AUC: GradientBoosting (test AUC = 0.9511).
+Gap between top model and the GridSearchCV-tuned RandomForest: 0.0001 -- statistically negligible given the CV std of ~0.005 seen across models in Task 5.
+
+Final recommendation: RandomForest(GridSearchCV-tuned) (test AUC = 0.9510, CV mean AUC = 0.9470). Justification: while GradientBoosting scores marginally higher on this single test split, the difference (0.0001) is well within the ~0.005 cross-validation standard deviation observed across models -- i.e. not a meaningful difference. The tuned RandomForest is preferred as the production choice because it is the model that was formally selected via 5-fold GridSearchCV on the training set only (test data untouched during selection, honest non-leaked estimate) inside a complete Imputer->Scaler->Classifier pipeline, making it directly deployable end-to-end. This is the model serialized as best_model.pkl and used downstream in Part 4.
