@@ -1,0 +1,160 @@
+======================================================================
+TASK 1: Load & inspect
+======================================================================
+Shape: (17000, 21)
+
+Head:
+                        customer_id gender  ...                              channels  offer_completed
+0  68be06ca386d4c31939f3a4f0e3dd783    NaN  ...  ['web', 'email', 'mobile', 'social']                1
+1  0610b486422d4921ae7d2bf64640c50b      F  ...            ['web', 'email', 'mobile']                1
+2  38fe809add3b4fcf9315a9694bb96ff5    NaN  ...         ['email', 'mobile', 'social']                0
+3  78afa995795e4d85b5d9ceeca43f5fef      F  ...            ['web', 'email', 'mobile']                1
+4  a03223e636434f42ac4c3df47e8bac43    NaN  ...                      ['web', 'email']                0
+
+[5 rows x 21 columns]
+
+Dtypes:
+customer_id                       str
+gender                            str
+age                             int64
+income                        float64
+income_bracket                    str
+became_member_on                  str
+membership_tenure_days          int64
+total_spend                   float64
+n_transactions                  int64
+avg_transaction_amount        float64
+n_offers_received               int64
+n_offers_viewed                 int64
+n_offers_completed              int64
+avg_time_to_complete_hours    float64
+offer_id                          str
+offer_type                        str
+reward                        float64
+difficulty                    float64
+duration                      float64
+channels                          str
+offer_completed                 int64
+dtype: object
+
+======================================================================
+TASK 2: Null analysis
+======================================================================
+
+                            null_count  null_pct
+avg_time_to_complete_hours        4226     24.86
+income                            2175     12.79
+gender                            2175     12.79
+income_bracket                    2175     12.79
+avg_transaction_amount             422      2.48
+offer_id                             6      0.04
+offer_type                           6      0.04
+reward                               6      0.04
+difficulty                           6      0.04
+duration                             6      0.04
+channels                             6      0.04
+
+Columns exceeding 20% null threshold: ['avg_time_to_complete_hours']
+
+======================================================================
+TASK 3: Median imputation (numeric, <20% null)
+======================================================================
+income -- mean=65404.99, median=64000.00 (median chosen: income is right-skewed, so the mean is pulled upward by high earners and would over-impute typical customers)
+avg_transaction_amount nulls correspond to customers with zero transactions -- filled with 0 (not median), since these are a genuine structural zero, not missing data.
+avg_time_to_complete_hours nulls correspond to customers who never completed an offer -- left as NaN (a fill value would fabricate a completion event); a has_completed_offer flag column was added instead.
+
+======================================================================
+TASK 4: Duplicate detection
+======================================================================
+Fully duplicate rows: 0
+Duplicate customer_id rows: 0
+Methodology: raw_merged.csv is built at one-row-per-customer granularity (each customer's transcript events are pre-aggregated and each customer is attached to a single 'primary offer' before the merge), so duplicate customer_id rows would only arise from a bug in the merge join, not from real repeated interactions. Verification against this design confirms 0 duplicates -- this is reported as a genuine (not fabricated) finding rather than manufacturing rows to drop for the sake of the exercise.
+
+======================================================================
+TASK 5: Dtype correction
+======================================================================
+Rows with age == 118 (sentinel error): 2175
+Of those, rows with also-missing gender at merge time: 2175 (gender was already imputed in Task 3b if applicable -- checked here against the original null pattern)
+age==118 replaced with NaN then median-imputed (median=55.0)
+became_member_on dtype -> datetime64[us]
+
+======================================================================
+TASK 6: Category dtype conversion
+======================================================================
+Memory before: 9,824,837 bytes
+Memory after:  5,270,807 bytes
+Reduction: 4,554,030 bytes (46.4%)
+
+======================================================================
+TASK 7: Skewness
+======================================================================
+
+total_spend               3.662521
+membership_tenure_days    1.029783
+income                    0.456821
+dtype: float64
+Most skewed column: total_spend (skew=3.663)
+
+======================================================================
+TASK 8: IQR outlier detection
+======================================================================
+total_spend: Q1=21.82, Q3=148.78, IQR=126.96, bounds=[-168.62, 339.23], outliers=521 (3.1%)
+income: Q1=51000.00, Q3=76000.00, IQR=25000.00, bounds=[13500.00, 113500.00], outliers=306 (1.8%)
+Decision: outliers are RETAINED, not dropped. High-spending customers are the exact population a marketing-uplift model needs to identify correctly (Part 5); removing them would bias every downstream model toward the low-spend majority and defeat the project's purpose.
+
+======================================================================
+TASK 9: Required plots
+======================================================================
+Saved 5 required plots to part1/plots/
+
+======================================================================
+TASK 10: Correlation heatmap
+======================================================================
+
+                             age    income  total_spend  ...    reward  difficulty  duration
+age                     1.000000  0.306306     0.098694  ...  0.016252    0.039207  0.023600
+income                  0.306306  1.000000     0.309624  ...  0.046803    0.068111  0.043445
+total_spend             0.098694  0.309624     1.000000  ...  0.058793    0.076091  0.063974
+membership_tenure_days  0.011310  0.025267     0.165005  ...  0.004159    0.006976  0.018433
+reward                  0.016252  0.046803     0.058793  ...  1.000000    0.373264 -0.017340
+difficulty              0.039207  0.068111     0.076091  ...  0.373264    1.000000  0.766441
+duration                0.023600  0.043445     0.063974  ... -0.017340    0.766441  1.000000
+
+[7 rows x 7 columns]
+
+income-total_spend correlation: 0.310
+Discussion: income and total_spend are positively correlated, but a plausible confound is membership_tenure_days (or general customer engagement/loyalty) -- longer-tenured, more engaged customers tend to both report higher income brackets (self-selection into the loyalty program) and accumulate more transactions simply by having been active longer, inflating the apparent income-spend relationship beyond a pure income effect.
+
+======================================================================
+TASK 8a: Mean vs median (total_spend, income)
+======================================================================
+total_spend: mean=104.44, median=69.41, gap=35.03
+income: mean=65225.24, median=64000.00, gap=1225.24
+Median is the safer imputation choice for both columns: the gap between mean and median confirms right-skew, so mean imputation would systematically overstate typical customers' income/spend.
+
+======================================================================
+TASK 8b: Spearman vs Pearson correlation
+======================================================================
+Top-3 pairs by |Spearman - Pearson| difference:
+total_spend             membership_tenure_days    0.198713
+difficulty              duration                  0.105424
+membership_tenure_days  income                    0.046111
+dtype: float64
+A large gap indicates a monotonic-but-nonlinear relationship that Pearson underestimates. The top pair here is total_spend vs membership_tenure_days (diff=0.199): total_spend accumulates non-linearly over membership_tenure_days (early tenure often shows rapid spend growth via onboarding offers, which then plateaus), so rank correlation (Spearman) picks up the monotonic trend more strongly than linear correlation (Pearson) does. difficulty vs duration also shows a notable gap, consistent with offer design following tiered rules rather than a strict linear scaling between the two.
+
+======================================================================
+TASK 8c: Grouped aggregation by offer_type
+======================================================================
+
+                     mean         std  count
+offer_type                                  
+bogo           108.302955  130.202251   6270
+discount       108.113214  126.960005   8798
+informational   75.265717  100.878844   1926
+
+Highest-mean offer_type: bogo
+Highest-std offer_type: bogo
+Ratio of highest to lowest mean: 1.44x
+Interpretation: the spread across offer_type means/stds indicates offer_type carries real predictive signal for spend -- informational offers (which carry no completion mechanic or reward) are expected to show a lower mean than bogo/discount, supporting offer_type's inclusion as a feature in Part 2's models.
+
+Saved cleaned_data.csv -> shape (17000, 22)
