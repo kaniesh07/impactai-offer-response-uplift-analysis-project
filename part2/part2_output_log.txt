@@ -1,0 +1,115 @@
+Dropped 6 rows with no primary offer (undefined offer_type). Remaining: 16994 rows.
+
+======================================================================
+LABEL DEFINITIONS
+======================================================================
+y_reg = total_spend (continuous)
+y_clf = offer_completed (binary: 1 if the customer completed their primary offer within its validity window, 0 otherwise). Chosen instead of median-binarizing total_spend, since spend is zero-heavy and a median split would be degenerate; offer_completed is a natural, pre-existing binary business outcome.
+
+======================================================================
+TASK 1: Encoding
+======================================================================
+Ordinal encoding: income_bracket -> {Low:0, Medium:1, High:2}. Ordering is justified because these categories represent a genuine ranked quantity (income level), so label encoding preserves meaningful distance/order information a model can use directly.
+
+Nominal (one-hot) encoding: gender, offer_type, channels_* flags. Label encoding would be inappropriate here because it would falsely imply an order (e.g., bogo=0 < discount=1 < informational=2 has no real meaning -- discount is not 'more' than bogo in any sense a linear model could exploit correctly).
+
+Regression feature matrix shape: (16994, 20)
+Regression feature columns: ['age', 'income', 'membership_tenure_days', 'income_bracket_encoded', 'n_transactions', 'n_offers_received', 'n_offers_viewed', 'n_offers_completed', 'reward', 'difficulty', 'duration', 'channel_web', 'channel_email', 'channel_mobile', 'channel_social', 'gender_M', 'gender_O', 'gender_Unknown', 'offer_discount', 'offer_informational']
+
+Classification feature matrix shape: (16994, 19) (excludes leaky columns: ['n_offers_completed', 'avg_time_to_complete_hours', 'has_completed_offer'])
+Classification feature columns: ['age', 'income', 'membership_tenure_days', 'income_bracket_encoded', 'n_transactions', 'n_offers_received', 'n_offers_viewed', 'reward', 'difficulty', 'duration', 'channel_web', 'channel_email', 'channel_mobile', 'channel_social', 'gender_M', 'gender_O', 'gender_Unknown', 'offer_discount', 'offer_informational']
+
+======================================================================
+TASK 2: Leak-free split + scaling
+======================================================================
+Regression train/test shapes: (13595, 20) / (3399, 20)
+Classification train/test shapes: (13595, 19) / (3399, 19)
+StandardScaler fit ONLY on the respective X_train (a separate scaler for the regression feature set and one for the classification feature set, since their columns differ), then applied to X_test via transform() (not fit_transform). Fitting the scaler on the full dataset (or on test data) would leak test-set mean/variance information into the training pipeline, giving an overly optimistic estimate of generalization performance -- the scaler's parameters must come exclusively from data the model is 'allowed' to see during training.
+
+======================================================================
+TASK 3: Linear Regression (predict total_spend)
+======================================================================
+MSE: 9682.443
+R^2: 0.406
+
+Top-3 coefficients by magnitude:
+n_offers_completed    47.741761
+n_transactions        37.019541
+income                30.256618
+dtype: float64
+Interpretation: coefficients with the largest magnitude drive the biggest swings in predicted spend per standard-deviation change in that (scaled) feature -- these are the levers most worth targeting in a marketing strategy.
+
+======================================================================
+TASK 4: Ridge Regression (alpha=1.0)
+======================================================================
+OLS  -> MSE: 9682.443, R^2: 0.406
+Ridge-> MSE: 9682.423, R^2: 0.406
+
+Coefficient comparison (largest shrinkage first):
+                      OLS_coef  Ridge_coef  abs_shrinkage
+difficulty            6.913260    6.902425       0.010835
+income               30.256618   30.247066       0.009552
+channel_mobile        0.361935    0.355844       0.006091
+offer_informational   8.595100    8.590281       0.004819
+n_offers_completed   47.741761   47.737937       0.003824
+Ridge's L2 penalty shrinks coefficient magnitudes toward zero, especially for features that are correlated with others (e.g., difficulty/duration/reward, which move together by offer design) -- this trades a small amount of training-set fit for a more stable, less variance-prone coefficient profile.
+
+======================================================================
+TASK 5: Class imbalance check
+======================================================================
+offer_completed distribution:
+offer_completed
+1    0.658232
+0    0.341768
+Name: proportion, dtype: float64
+Minority class share: 34.2%
+Apply class_weight='balanced'? True (threshold: minority class < 35%)
+class_weight parameter used for Logistic Regression: balanced
+
+======================================================================
+TASK 5 (cont.): Logistic Regression
+======================================================================
+Confusion matrix:
+[[ 963  210]
+ [ 311 1915]]
+Accuracy: 0.847 | Precision: 0.901 | Recall: 0.860 | F1: 0.880 | AUC: 0.921
+Saved ROC curve -> plots/roc_curve_logreg.png
+
+======================================================================
+Business framing: Precision vs Recall
+======================================================================
+Precision = TP / (TP + FP): of customers we PREDICT will complete an offer, what fraction actually do.
+Recall = TP / (TP + FN): of customers who ACTUALLY complete an offer, what fraction we correctly identify.
+False negatives (predicting non-completion for an actual completer) = a missed marketing opportunity -- we fail to reach a customer who was ready to respond, forfeiting revenue we could have captured. False positives (predicting completion for a non-completer) = wasted incentive cost -- we send a reward-bearing offer to someone who was never going to redeem it, eating into margin for no return. Given that customer acquisition/re-engagement value typically exceeds the marginal cost of one unredeemed offer, this business slightly favors RECALL over precision -- better to over-target and accept some wasted offers than to systematically under-reach likely completers.
+
+======================================================================
+TASK 5b: Threshold sensitivity (0.30-0.70)
+======================================================================
+
+   threshold  precision    recall        f1
+0        0.3   0.858015  0.947439  0.900512
+1        0.4   0.881356  0.911051  0.895958
+2        0.5   0.901176  0.860288  0.880257
+3        0.6   0.918092  0.795597  0.852467
+4        0.7   0.933294  0.710243  0.806633
+
+F1-maximizing threshold: 0.3 (F1=0.901)
+Given the recall-favoring business framing above, a threshold at or slightly below the F1-optimal point (0.3) is reasonable -- it avoids over-correcting toward precision at the cost of missing likely completers.
+
+======================================================================
+TASK 6: Regularization experiment (Logistic Regression C=0.01 vs C=1.0)
+======================================================================
+
+      C  accuracy  precision    recall        f1       auc  mean_abs_coef
+0  0.01  0.843483   0.898026  0.858491  0.877814  0.918844       0.370281
+1  1.00  0.846720   0.901176  0.860288  0.880257  0.920976       0.535803
+C is the inverse of regularization strength in scikit-learn's LogisticRegression (smaller C = stronger L2 penalty). C=0.01 heavily shrinks coefficients toward zero (lower mean_abs_coef), producing a simpler, more conservative decision boundary; C=1.0 allows the model to fit the training data more closely, at some risk of overfitting to noise.
+
+======================================================================
+TASK 7: Bootstrap AUC 95% CI (500 resamples)
+======================================================================
+Bootstrap resamples used: 500
+Mean bootstrap AUC: 0.9209
+Mean AUC difference from random baseline (0.5): 0.4209
+95% CI for AUC: [0.9107, 0.9299]
+Does the 95% CI exclude 0.5 (random-chance baseline)? True -- the model performs significantly better than random guessing.
