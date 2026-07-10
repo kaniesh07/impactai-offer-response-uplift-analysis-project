@@ -1,0 +1,10 @@
+# Never commit real API keys
+.env
+part4/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
